@@ -74,6 +74,8 @@ namespace std{
 #endif
 
     bitset(){
+      //Serial.print("Constructing new bitset N=");Serial.print(N); Serial.print(" 0x");Serial.println((int)this, HEX);
+      
       reset();
     }
     bitset(unsigned long val){
@@ -88,10 +90,17 @@ namespace std{
     }
 
     bitset(const bitset & val){
+      //Serial.print("Constructing bitset N=");Serial.print(N); Serial.print(" 0x");Serial.print((int)this, HEX);Serial.print(" from another ");Serial.println((int)(&val),HEX);
       for(size_t i = 0; i < num_bytes; ++i){
         data[i] = val.data[i];
       }
     }
+    /*
+    ~bitset()
+    {
+      //Serial.print("Destructing bitset N=");Serial.print(N); Serial.print(" 0x");Serial.println((int)this, HEX);      
+    }
+    */
 
     bitset<N>& operator&=(const bitset<N>& rhs){
       for(size_t i =0; i < num_bytes; ++i){
@@ -149,7 +158,7 @@ namespace std{
       return *this;
     }
     bitset<N>& reset(){
-      for(size_t i = 0; i <= num_bytes; ++i){
+      for(size_t i = 0; i < num_bytes; ++i){
         data[i] = 0;
       }
       return *this;
@@ -165,7 +174,7 @@ namespace std{
     }
 
     bitset<N>& flip(){
-      for(size_t i = 0; i <= num_bytes; ++i){
+      for(size_t i = 0; i < num_bytes; ++i){
         data[i] =  ~data[i];
       }
       return *this;
@@ -231,6 +240,8 @@ namespace std{
     }
 
     bitset<N>& operator=(const bitset<N> & rhs){
+      //Serial.print("Affecting bitset N=");Serial.print(N); Serial.print(" 0x");Serial.print((int)this, HEX);Serial.print(" from another ");Serial.println((int)(&rhs),HEX);
+      
       if(&rhs == this){
         return *this;
       }
@@ -316,6 +327,10 @@ namespace std{
 
 }//std
 
+//fwd
+int freeRam();
+
+/// Common interface without templates
 class IShiftCommon
 {
   public:
@@ -324,9 +339,10 @@ class IShiftCommon
   virtual void loop() = 0;
 };
 
-/// Lecture brute des  entrées sur X bits
+/// Raw reading of BITS bits of input x INS entries = OUT total bits read
 template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShiftCommon
 {
+  /// Delay for loading data in the input chips
   const int PULSE_WIDTH_USEC = 5;
 
   /// Callback type
@@ -340,10 +356,18 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
   byte m_dataPin[INS];
   /// Clock
   byte m_clockPin;
-  /// Callback
+  /// Callback event on modified input
   triggerEventCallback m_callbackTrigger;
+
+  /// the debounce time; increase if the output flickers
+  const long debounceDelay = 30;    
+  /// event times for deboucing
+  long m_lastDebounceTime;
+  /// Bitfield: current official button states
+  std::bitset<OUTS>  m_buttonState;
+  /// Bitfield: last state read (before debouncing)
+  std::bitset<OUTS>  m_lastButtonRead;   
   
-  /// Total bits
  
   public:
   
@@ -377,10 +401,13 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
     delayMicroseconds(PULSE_WIDTH_USEC);
 
     Serial.println("First read... ");
+    Serial.println(freeRam());
 
     m_lastDebounceTime =0L;
     m_buttonState.reset();
-    //m_buttonState = readInputs();
+    m_buttonState = readInputs();
+    //functionCall();
+    //readInputsInner();
     m_lastButtonRead = m_buttonState;          
     Serial.println("First read done... ");
   }
@@ -459,21 +486,11 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
         digitalWrite(m_clockPin, LOW);
     }
     // Delay Between polls
-    delayMicroseconds(1000);
+    //delayMicroseconds(1000);
 
     return(bytesVal);
   }
 
-
-    /// the debounce time; increase if the output flickers
-    const long debounceDelay = 30;    
-    
-    /// Bitfield: état boutons
-    std::bitset<OUTS>  m_buttonState;
-    /// Bitfield: dernière lecture
-    std::bitset<OUTS>  m_lastButtonRead;   
-    /// event times
-    long m_lastDebounceTime;
 
 
     /// Boucle pour tester les entrées
@@ -512,17 +529,17 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
     bool triggerEvent(std::bitset<OUTS> & previousFlags, std::bitset<OUTS> & currentFlags)
     {
       bool ok = true;
+#if 0
       Serial.print("<[");previousFlags.print(Serial);Serial.println("]");
       Serial.print(">[");currentFlags.print(Serial);Serial.println("]");
-      
+#endif
       for (int n = 0; n < OUTS && ok; n++)
       {
         // Compare Nth bit
-        if (previousFlags.test(n) != currentFlags.test(n))
-        {
+        auto current = currentFlags.test(n);
+        if (previousFlags.test(n) != current)
           // message on variation
-          ok = m_callbackTrigger(n, currentFlags.test(n));
-        } 
+          ok = m_callbackTrigger(n, current);
       }
       return ok;
     }

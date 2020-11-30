@@ -10,10 +10,11 @@
 
 // ----------------------------------------------------------------
 // Arduino modules
-// - INPUT: Read informations and publish them
-// - OUTPUT: Subscribe to informations and write them physically
-// - CORE: Subscribe to informations and publish computations
-// - TRACE: Subscribe to topics and print them on screen
+// - INPUT: Read informations on chips and publish them to MQTT
+// - OUTPUT: Subscribe to informations on MQTT and write them physically on chips
+// - CORE: Subscribe to informations on MQTT and publish computations on MQTT
+// - TRACE: Subscribe to topics and print them on screen SSD1306
+//
 // - SENSOR: Read sensors and publishes them --- Other project ? ---
 // ----------------------------------------------------------------
 
@@ -55,21 +56,36 @@ const int mqtt_broker_port = 1883;
 
 // MISC
 // Common defs
-#define PIN_DIPSWITCH A7
-#define STATUS_LED PD2
-// Input defs
-#define PIN_CHAINLENGTH A6 
-#define PIN_INPUT_PL A0
-#define PIN_INPUT_CE A1
-#define PIN_INPUT_CP A2
 
+// The dip switches for node number are hardwired on A7 on the hardware module
+#define PIN_DIPSWITCH A7
+// The status led is on D2 on the hardware module
+#define STATUS_LED PD2
+
+// Input defs
+
+// The dip switches for chain length is on A6 on the hardware module
+#define PIN_CHAINLENGTH A6 
+// The 74HC165E LD/PL (Parallel load) pin is on A0
+#define PIN_INPUT_PL A0
+// The 74HC165E CE (Clock enable) pin is on A1
+#define PIN_INPUT_CE A1
+// The 74HC165E CP (Clock) pin is on A2
+#define PIN_INPUT_CP A2
+// The 74HC165E Main data pin is on D3
 #define PIN_INPUT_DATA0 PD3
+// The 74HC165E "slave1" data pin is on D4
 #define PIN_INPUT_DATA1 PD4
+// The 74HC165E "slave2" data pin is on D5
 #define PIN_INPUT_DATA2 PD5
 
 // Output defs
+
+// The output pin for the 74HC595 is hardwired on A0
 #define PIN_OUTPUT_DATA A0
+// The clock pin for the 74HC595 is hardwired on A1
 #define PIN_OUTPUT_CLOCK A1
+// The latch pin for the 74HC595 is hardwired on A2
 #define PIN_OUTPUT_LATCH A2
 
 // MQTT
@@ -429,14 +445,11 @@ int mqtt_trace_subscribe() // Source for the traces / status
 // MQTT Client connect/reconnect
 void mqttClientConnect()
 {
-  Serial.println(freeRam());
-  Serial.println("mqttClientConnect -------------------- ");
   // nb: our client name is our status topic
   char my_mqtt_status_topic[sizeof(MQTT_STATUS_PUBLISH_TOPIC)+1]; 
   snprintf(my_mqtt_status_topic, sizeof(my_mqtt_status_topic),MQTT_STATUS_PUBLISH_TOPIC,getArduinoNumber());
 
   Serial.print("Attempting MQTT connect for ");Serial.println(my_mqtt_status_topic);
-  Serial.println(freeRam());
 
   // client id, client username, client password, last will topic, last will qos, last will retain, last will message
   if (
@@ -494,8 +507,7 @@ void setup_common()
 {
   // Open serial communications
   Serial.begin(115200);
-  Serial.println("@ Starting up...");
-  Serial.println(freeRam());
+  Serial.print("@ Starting up... with ");  Serial.print(freeRam());Serial.println(" free ram.");
 
   // Just blink a hello
   blink.set(Blink::BlinkMode::blink_black);
@@ -541,19 +553,17 @@ void common_loop()
 void setup()
 {
   blink.setup();
+
   setup_common();
 
-  Serial.println(freeRam());
   #ifdef MODE_INPUT
   setup_input();
   #endif
-  Serial.println(freeRam());
   
   #ifdef MODE_OUTPUT
   // Setup outpin pins for shift registers
   outputShiftRegister.setup();
   #endif
-  Serial.println("setup ends....");
 }
 
 // NORMAL LOOP ----------------------------------------------------------
@@ -568,7 +578,6 @@ void loop()
   if (!mqttClient.connected())
     mqttClientConnect();
 
-  #if 1
   // common loop interest
   common_loop();
   
@@ -577,5 +586,4 @@ void loop()
 
   // MQTT Loop
   mqttClient.loop();    
-  #endif
 }
