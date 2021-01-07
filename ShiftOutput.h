@@ -4,17 +4,19 @@ class ShiftOutput
   int m_dataPin;
   int m_clockPin;
   int m_latchPin;
+  int m_oePin;
 
   long m_data;
   
   public:
     /// Création avec les trois pins d'entrée/sortie
-    ShiftOutput(int dataPin, int clockPin, int latchPin)
+    ShiftOutput(int dataPin, int clockPin, int latchPin, int OEPin)
     {
       m_data = 0;
       m_dataPin = dataPin;
       m_clockPin = clockPin;
       m_latchPin = latchPin;      
+      m_oePin = OEPin;
     }
 
     /// Statut actuel d'une I/O de la carte
@@ -46,7 +48,11 @@ class ShiftOutput
       pinMode(m_latchPin, OUTPUT);
       pinMode(m_dataPin, OUTPUT);  
       pinMode(m_clockPin, OUTPUT);
+      pinMode(m_oePin, OUTPUT);    
       apply();
+      
+      // Enable the outputs on the chipset (prevent floating output on power-on)
+      digitalWrite(m_oePin, LOW);
     }
 
     void shift(uint8_t bitOrder, byte val)
@@ -55,7 +61,7 @@ class ShiftOutput
          shiftOut(m_dataPin, m_clockPin, bitOrder, val);
     #else
          int i;
-         const int delaymus = 50;
+         const int delaymus = 100;
     
          for (i = 0; i < 8; i++)  {
                digitalWrite(m_clockPin, LOW);            
@@ -77,6 +83,7 @@ class ShiftOutput
       // turn off the output so the pins don't light up
       // while you're shifting bits:
       digitalWrite(m_latchPin, LOW);
+      
       // shift the bits out:     
       shift( LSBFIRST, (m_data >> 24) & 0xFF);
       shift( LSBFIRST, (m_data >> 16) & 0xFF);
@@ -87,4 +94,3 @@ class ShiftOutput
       digitalWrite(m_latchPin, HIGH);
     }
 };
-
