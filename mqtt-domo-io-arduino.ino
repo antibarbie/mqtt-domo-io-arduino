@@ -2,18 +2,20 @@
 #include <Ethernet.h>
 #include <PubSubClient.h>
 #include <string.h>
+
+#define HACK_FIX_LAST_TWO_BITS // Hardware V2.1 has wrong inputs order
+
 #include "ShiftOutput.h"
 #include "ShiftInput.h"
 #include "Blink.h"
 
-#define RELEASE_VERSION "0.3 - 11/2020"
+#define RELEASE_VERSION "0.6 - 02/2021"
 
 // ----------------------------------------------------------------
 // Arduino modules
 // - INPUT: Read informations on chips and publish them to MQTT
 // - OUTPUT: Subscribe to informations on MQTT and write them physically on chips
-// - CORE: Subscribe to informations on MQTT and publish computations on MQTT
-// - TRACE: Subscribe to topics and print them on screen SSD1306
+// - CORE: Subscribe to informations on MQTT and publish computations on MQTT - print stuff on screen SSD1306
 //
 // - SENSOR: Read sensors and publishes them --- Other project ? ---
 // ----------------------------------------------------------------
@@ -21,11 +23,10 @@
 //#define MODE_INPUT
 //#define MODE_OUTPUT
 //#define MODE_CORE
-//#define MODE_TRACE
 
-#if !defined MODE_INPUT && !defined MODE_OUTPUT && !defined MODE_CORE && !defined MODE_TRACE
-#warning "Using a default MODE. You can should define MODE_CORE, MODE_INPUT or MODE_OUTPUT or MODE_TRACE."
-#define MODE_OUTPUT
+#if !defined MODE_INPUT && !defined MODE_OUTPUT && !defined MODE_CORE 
+#warning "Using a default MODE. You can should define MODE_CORE, MODE_INPUT or MODE_OUTPUT."
+#define MODE_CORE
 #endif
 
 // ----------------------------------------------------------------------------
@@ -43,7 +44,7 @@ byte current_gw[] = { 192, 168, 100, 1 };
 byte current_subnet[] = { 255, 255, 255, 0 };
 
 // Target broker - key element for our mqtt network !
-byte mqtt_broker_address[] = { 192, 168, 100, 44 };
+byte mqtt_broker_address[] = { 192, 168, 100, 46 };
 const int mqtt_broker_port = 1883;
 
 // ----------------------------------------------------------------------------
@@ -57,10 +58,13 @@ const int mqtt_broker_port = 1883;
 // MISC
 // Common defs
 
+// Reset the network is hardwired to the PIN 7
+#define PIN_RESET_NETWORK 7
+
 // The dip switches for node number are hardwired on A7 on the hardware module
 #define PIN_DIPSWITCH A7
 // The status led is on D2 on the hardware module
-#define STATUS_LED PD2
+#define STATUS_LED 2
 
 // Input defs
 
@@ -73,11 +77,15 @@ const int mqtt_broker_port = 1883;
 // The 74HC165E CP (Clock) pin is on A2
 #define PIN_INPUT_CP A2
 // The 74HC165E Main data pin is on D3
-#define PIN_INPUT_DATA0 PD3
+#define PIN_INPUT_DATA0 3
 // The 74HC165E "slave1" data pin is on D4
-#define PIN_INPUT_DATA1 PD4
+#define PIN_INPUT_DATA1 4
 // The 74HC165E "slave2" data pin is on D5
-#define PIN_INPUT_DATA2 PD5
+#define PIN_INPUT_DATA2 5
+// Option header OPT1 in INPUT BOARD
+#define PIN_INPUT_OPTION1 6
+// Option header OPT2 in INPUT BOARD
+#define PIN_INPUT_OPTION2 9
 
 // Output defs
 
@@ -97,12 +105,13 @@ const int mqtt_broker_port = 1883;
 // ROOT/STATUS/IN/1
 // ROOT/STATUS/CORE/1
 // ROOT/STATUS/OUT/0
-// ROOT/TRACE/..   (idem STATUS)
+
+// Watchdog for nodered logic - If nodered is running our CORE is inactive
+#define MQTT_NODERED_WATCHDOG MQTT_ROOT_TOPIC "/NR/WATCHDOG"
 
 #define MQTT_ALL_INPUT MQTT_ROOT_TOPIC "/IN/#"
 #define MQTT_ALL_OUTPUT MQTT_ROOT_TOPIC "/OUT/#"
 #define MQTT_ALL_STATUS MQTT_ROOT_TOPIC "/STATUS/#"
-#define MQTT_ALL_TRACE MQTT_ROOT_TOPIC "/TRACE/#"
 #define MQTT_ALL_NODES_SUFFIX "/#"
 
 // My own prefix
@@ -123,14 +132,7 @@ const int mqtt_broker_port = 1883;
 #define MQTT_SHORT_NAME  "CORE NODE #%d - UID#%d"
 #define MQTT_SHORT_TOPIC "/CORE/%d"
 #endif
-#ifdef MODE_TRACE
-#define MQTT_SHORT_NAME  "TRACE NODE #%d - UID#%d"
-#define MQTT_SHORT_TOPIC "/TRACE/%d"
-#endif
 
-
-// Generic TRACE publish topic ROOT/TRACE/TYPE/node_id (FMT => %d)
-#define MQTT_TRACE_PUBLISH_TOPIC MQTT_ROOT_TOPIC "/TRACE" MQTT_SHORT_TOPIC
 
 // Generic STATUS publish topic ROOT/STATUS/TYPE/node_id (FMT => %d)
 #define MQTT_STATUS_PUBLISH_TOPIC MQTT_ROOT_TOPIC "/STATUS" MQTT_SHORT_TOPIC
@@ -145,10 +147,9 @@ const int mqtt_broker_port = 1883;
 // ----------------------------------------------------------------------------
 // ARDUINO #
 
-// Leaves room for some outputs, 2 core, 2 trace, 4 inputs
+// Leaves room for some outputs, 2 core, 4 inputs
 #define OUTPUT_BASE 248
-#define CORE_BASE 246
-#define TRACE_BASE 244
+#define CORE_BASE 244
 #define INPUT_BASE 240
 
 #ifdef MODE_OUTPUT
@@ -157,11 +158,7 @@ const int mqtt_broker_port = 1883;
 #ifdef MODE_INPUT
 #define XBASE INPUT_BASE
 #else
-#ifdef MODE_TRACE
-#define XBASE TRACE_BASE
-#else
 #define XBASE CORE_BASE
-#endif
 #endif
 #endif
 
@@ -181,31 +178,32 @@ int setup_compute_dipswitch_number(int pinDipSwitch)
 {
   // Resistors :       GND -- 10k -- A0 --+---+---+
   // [   ] 0 0 0 : 0  [ @ ] 0 1 0 : 2     |   |   |
-  // [@@@] 0R         [@ @] 317R         47k 22k 10k
+  // [@@@] 0U         [@ @] 318U         47k 22k 10k
   //                                      |   |   |
   // [@@ ] 1 1 0 : 3  [@  ] 1 0 0 : 1     1   2   3
-  // [__@] 407R       [ @@] 176R
+  // [__@] 407U       [ @@] 178U
   //
   // [  @] 0 0 1 : 4  [ @@] 0 1 1 : 6
-  // [@@ ] 510R       [@  ] 605R
+  // [@@ ] 510U       [@  ] 605U
   //
   // [@@@] 1 1 1 : 7  [@ @] 1 0 1 : 5
-  // [___] 638R       [_@_] 559R
+  // [___] 638U       [_@_] 559U
   //
   int dip = analogRead(pinDipSwitch);
-  //Serial.print("@@DEBUG:   DIP SWITCH value says: "); Serial.println(dip);
+  Serial.print("@@DEBUG:   DIP SWITCH value says: "); Serial.println(dip);
 
   const int id_table[] = { 0, 176, 317, 407, 510, 559, 605, 638 };
-  const int epsilon = 20;
-  for (int i = 0; i < sizeof(id_table) / sizeof(int); i++) {
-    if ((id_table[i] - epsilon <= dip) && (id_table[i] + epsilon >= dip))
+  int delta = 9999;
+  int found_closer = 0;
+  
+  for (int i = 0; i < sizeof(id_table) / sizeof(int); i++)
+    if ((abs(id_table[i] - dip) < delta))
     {
-      //Serial.print("@@DEBUG:  Found DIP SWITCH: "); Serial.print(i); Serial.print("  for value: "); Serial.println(dip);
-      return i;
-    }
-  }
-
-  return 0;
+      delta = abs(id_table[i] - dip);
+      found_closer = i;
+    }      
+  Serial.print("@@DEBUG:  Found DIP SWITCH: "); Serial.print(found_closer); Serial.print("  for value: "); Serial.println(dip);
+  return found_closer;
 }
 
 // Return DIP SWITCH Arduino number
@@ -218,10 +216,6 @@ int getArduinoNumber()
 #define UNIQUE_ID_ARDUINO_NUMBER ((byte)getArduinoNumber() + (byte)XBASE)
 
 
-// Debug output for our mac address
-
-
-
 
 
 // --------------------------------------------------------------------------------------
@@ -230,7 +224,6 @@ int getArduinoNumber()
 void mqtt_input_callback(char* topic, byte* payload, unsigned int length);
 void mqtt_output_callback(char* topic, byte* payload, unsigned int length);
 void mqtt_core_callback(char* topic, byte* payload, unsigned int length);
-void mqtt_trace_callback(char* topic, byte* payload, unsigned int length);
 
 // Common callback
 void MqttMessageCallback(char* topic, byte* payload, unsigned int length) {
@@ -254,9 +247,6 @@ void MqttMessageCallback(char* topic, byte* payload, unsigned int length) {
 #endif
 #ifdef MODE_CORE
   mqtt_core_callback(topic, payload, length);
-#endif
-#ifdef MODE_TRACE
-  mqtt_trace_callback(topic, payload, length);
 #endif
 
 }
@@ -293,7 +283,16 @@ IShiftCommon * _current_input;
 bool onInputButton(int inputIndex, bool inputStatus)
 {
   char my_topic[sizeof(MQTT_IO_PUBLISH_TOPIC) + 2]; // "%d%d" turns into "999999" at worst so +2
+  
+#ifdef LINEAR_INPUT
+  // Publish to base/IN/<id>/<flatindex>
   snprintf(my_topic, sizeof(my_topic), MQTT_IO_PUBLISH_TOPIC, getArduinoNumber(), inputIndex);
+#else
+  // Publish to base/IN/<id + index / 32 (slave modules)>/<index % 32  (per module)>
+  auto arduinoModule = getArduinoNumber() + inputIndex / 32;
+  snprintf(my_topic, sizeof(my_topic), MQTT_IO_PUBLISH_TOPIC, arduinoModule, inputIndex % 32);
+#endif
+  
   Serial.print("Publishing to '"); Serial.print(my_topic); Serial.print("' = "); Serial.println(inputStatus ? "1" : "0");
 
   bool ok = mqttClient.publish(my_topic, inputStatus ? "1" : "0");
@@ -307,12 +306,21 @@ bool onInputButton(int inputIndex, bool inputStatus)
 void setup_input()
 {
   // D9-D6 : OPT INPUT
+
+  // Read options !
+  pinMode(PIN_INPUT_OPTION1, INPUT_PULLUP);
+  pinMode(PIN_INPUT_OPTION2, INPUT_PULLUP);
+  auto option1_no_slaves = digitalRead(PIN_INPUT_OPTION1) == LOW; // Option is pulled LOW when jumper is set
+  auto option2_unknown = digitalRead(PIN_INPUT_OPTION2) == LOW;
+  Serial.print("Read OPT1/OPT2 : "); Serial.print(option1_no_slaves?"On/":"Off/");Serial.println(option2_unknown?"On":"Off");
+  
   // D3 : INPUT CHAIN 0
   // D4 : INPUT CHAIN 1
   // D5 : INPUT CHAIN 2
   // A0,A1,A2 : PL,CE,CP
 
   // A6: DIP SWITCH CHAIN LENGTH
+  delay(2000); // enough time for the capacitors to load (otherwise we measure a wrong tension)
   byte _input_chain_length = setup_compute_dipswitch_number(PIN_CHAINLENGTH);
   Serial.print("Initialize CHAIN LENGTH : "); Serial.println(_input_chain_length);
 
@@ -322,7 +330,10 @@ void setup_input()
   {
     default://int ploadPin,int clockEnablePin,int clockPin, int (&dataPins)[INS]
     case 0:  // T = 0, read local chips + slave1 + slave2
-      _current_input = new ShiftInput<32, 3, 96>(onInputButton, PIN_INPUT_PL, PIN_INPUT_CE, PIN_INPUT_CP, {PIN_INPUT_DATA0, PIN_INPUT_DATA1, PIN_INPUT_DATA2});
+      if (option1_no_slaves)
+        _current_input = new ShiftInput<32, 1, 32>(onInputButton, PIN_INPUT_PL, PIN_INPUT_CE, PIN_INPUT_CP, { PIN_INPUT_DATA0 });
+      else
+        _current_input = new ShiftInput<32, 3, 96>(onInputButton, PIN_INPUT_PL, PIN_INPUT_CE, PIN_INPUT_CP, {PIN_INPUT_DATA0, PIN_INPUT_DATA1, PIN_INPUT_DATA2});
       break;
     case 1:  // T = 1, read local + 1 chained chips
       _current_input = new ShiftInput<64, 1, 64>(onInputButton, PIN_INPUT_PL, PIN_INPUT_CE, PIN_INPUT_CP, {PIN_INPUT_DATA0});
@@ -444,15 +455,20 @@ struct CoreIODef
   unsigned short         max_impulse_on_ms;
   /// Behaviour : alternative : only on when input is on
   bool                   behave_only_on_when_input_on;
+  /// Input Handled by NODE-RED or other supervisor when watdog is currently running
+  bool                   handled_by_other_supervisor;
   /// Quick status
   StatusInputIO          input_status;
 };
 
 
 CoreIODef core_io_table[] = {
+  
+  // Wire 1 : 1..10 =>  IN/2/0 .. IN/2/9
+ 
   // CHP
-  { "MDB/IN/2/0", "MDB/OUT/0/22" },
-  { "MDB/IN/2/0", "MDB/OUT/0/25" },
+  { "MDB/IN/2/0", "MDB/OUT/0/22" },//nb: Light 1
+  { "MDB/IN/2/0", "MDB/OUT/0/25" },//nb: Light 2
   { "MDB/IN/2/1", "MDB/OUT/0/22" },
   { "MDB/IN/2/1", "MDB/OUT/0/25" },
   { "MDB/IN/2/4", "MDB/OUT/0/22" },
@@ -462,20 +478,55 @@ CoreIODef core_io_table[] = {
   // CHP - SDB
   { "MDB/IN/2/6", "MDB/OUT/0/23" },
   { "MDB/IN/2/7", "MDB/OUT/0/24" },
-  // CHM
-  { "MDB/IN/1/19", "MDB/OUT/0/21" },
+
+  // VR parental suite
+  { "MDB/IN/2/2", "MDB/OUT/1/0", "MDB/OUT/1/1" },
+  { "MDB/IN/2/3", "MDB/OUT/1/1", "MDB/OUT/1/0" },
+  // VR bath parental suite
+  { "MDB/IN/2/8", "MDB/OUT/1/2", "MDB/OUT/1/3" },
+  { "MDB/IN/2/9", "MDB/OUT/1/3", "MDB/OUT/1/2" },
+
+  // Wire 6 : 1..11 => IN/1/16..IN/1/26
+  
   // CHC
   { "MDB/IN/1/16", "MDB/OUT/0/20" },
+  // VR room 2
+  { "MDB/IN/1/17", "MDB/OUT/1/6", "MDB/OUT/1/7" },
+  { "MDB/IN/1/18", "MDB/OUT/1/7", "MDB/OUT/1/6" },
+  // CHM
+  { "MDB/IN/1/19", "MDB/OUT/0/21" },
+  // VR room 1
+  { "MDB/IN/1/20", "MDB/OUT/1/4", "MDB/OUT/1/5" },
+  { "MDB/IN/1/21", "MDB/OUT/1/5", "MDB/OUT/1/4" },
+
+  // Wire 5 : 1..10 : IN/1/0 .. IN/1/8 (9?)
+  
   // Salon + ext
   { "MDB/IN/1/4", "MDB/OUT/0/11" },
   { "MDB/IN/1/5", "MDB/OUT/0/13" },//ext ouest
   { "MDB/IN/1/8", "MDB/OUT/0/11" },
   { "MDB/IN/1/24", "MDB/OUT/0/11" },
+  
   // Séjour + ext
   { "MDB/IN/1/0", "MDB/OUT/0/10" },
-  { "MDB/IN/0/19", "MDB/OUT/0/10" },
+  { "MDB/IN/0/19", "MDB/OUT/0/10" },//
   { "MDB/IN/1/1", "MDB/OUT/0/14" },//ext sud
   { "MDB/IN/1/23", "MDB/OUT/0/10" },
+
+  // VR roll living saloon
+  { "MDB/IN/1/2", "MDB/OUT/1/10", "MDB/OUT/1/11" },//Living
+  { "MDB/IN/1/3", "MDB/OUT/1/11", "MDB/OUT/1/10" },
+  { "MDB/IN/1/6", "MDB/OUT/1/12", "MDB/OUT/1/13" },//Saloon
+  { "MDB/IN/1/7", "MDB/OUT/1/13", "MDB/OUT/1/12" },
+
+  // Wire 4 : 1..11 => IN/0/16..IN/0/26
+
+  // VR roll living kitchen saloon
+  { "MDB/IN/0/20", "MDB/OUT/1/8", "MDB/OUT/1/9"  },//Kitchen
+  { "MDB/IN/0/21", "MDB/OUT/1/9", "MDB/OUT/1/8"  },
+
+  // Switch on/off kitchen -> Electric VMC trap
+  { "MDB/IN/0/26", "MDB/OUT/1/21", NULL, 0, true }, // no toggle
 
   // Cuisine
   { "MDB/IN/0/17", "MDB/OUT/0/16" },
@@ -488,23 +539,35 @@ CoreIODef core_io_table[] = {
   { "MDB/IN/0/25", "MDB/OUT/0/12" },
   // Cellier
   { "MDB/IN/0/16", "MDB/OUT/0/15" },
+
+
+  // Wire 7: 1..6 IN/2/10..IN/2/15
+  
   // Local tech
   { "MDB/IN/2/13", "MDB/OUT/1/16" },
+  
   // Bua
-  { "MDB/IN/2/10", "MDB/OUT/1/17" },
-  { "MDB/IN/2/11", "MDB/OUT/1/18" },
-  { "MDB/IN/2/12", "MDB/OUT/0/5" },//grenier
+  { "MDB/IN/2/10", "MDB/OUT/1/17" },//Bua Main
+  { "MDB/IN/2/11", "MDB/OUT/1/18" },//Bua Other
+  { "MDB/IN/2/12", "MDB/OUT/0/5" }, //grenier
 
   // WC
-  { "MDB/IN/2/15", "MDB/OUT/1/19" }, //inversé avec couloir
+  { "MDB/IN/2/15", "MDB/OUT/1/19" },
+
+  // Wire 8 : 1..8 => IN/2/16 .. IN/2/23
+    
   // SDB
-  { "MDB/IN/2/22", "MDB/OUT/0/18" },
-  { "MDB/IN/2/23", "MDB/OUT/0/19" },
+  { "MDB/IN/2/22", "MDB/OUT/0/18" },//SDB Main
+  { "MDB/IN/2/23", "MDB/OUT/0/19" },//SDB Other
+
+  // Wire 2 : 1..7 => IN/0/0 .. 
+  // Wire 3 : 1 => IN/0/9 
+  
   // Garage + ext
   { "MDB/IN/0/0", "MDB/OUT/0/6" },
   { "MDB/IN/0/1", "MDB/OUT/0/6" },
   { "MDB/IN/0/2", "MDB/OUT/0/6" },
-  { "MDB/IN/0/3", "MDB/OUT/0/3" },
+  { "MDB/IN/0/3", "MDB/OUT/0/3" },//Ext
   // Grenier
   { "MDB/IN/0/9", "MDB/OUT/0/5" },
   // Cave 1/2/3
@@ -526,36 +589,15 @@ CoreIODef core_io_table[] = {
   { "MDB/IN/1/26", "MDB/OUT/0/7" },
 
   //
-  // VR parental suite
-  { "MDB/IN/2/2", "MDB/OUT/1/0", "MDB/OUT/1/1" },
-  { "MDB/IN/2/3", "MDB/OUT/1/1", "MDB/OUT/1/0" },
-  // VR bath parental suite
-  { "MDB/IN/2/8", "MDB/OUT/1/2", "MDB/OUT/1/3" },
-  { "MDB/IN/2/9", "MDB/OUT/1/3", "MDB/OUT/1/2" },
-  // VR room 2
-  { "MDB/IN/1/17", "MDB/OUT/1/6", "MDB/OUT/1/7" },
-  { "MDB/IN/1/18", "MDB/OUT/1/7", "MDB/OUT/1/6" },
-  // VR room 1
-  { "MDB/IN/1/20", "MDB/OUT/1/4", "MDB/OUT/1/5" },
-  { "MDB/IN/1/21", "MDB/OUT/1/5", "MDB/OUT/1/4" },
 
-  // VR séjour cuisine salon
-  { "MDB/IN/0/20", "MDB/OUT/1/8", "MDB/OUT/1/9"  },
-  { "MDB/IN/0/21", "MDB/OUT/1/9", "MDB/OUT/1/8"  },
-  { "MDB/IN/1/2", "MDB/OUT/1/10", "MDB/OUT/1/11" },
-  { "MDB/IN/1/3", "MDB/OUT/1/11", "MDB/OUT/1/10" },
-  { "MDB/IN/1/6", "MDB/OUT/1/12", "MDB/OUT/1/13" },
-  { "MDB/IN/1/7", "MDB/OUT/1/13", "MDB/OUT/1/12" },
 
-  // Switch on/off kitchen -> Electric VMC trap
-  { "MDB/IN/0/26", "MDB/OUT/1/21", NULL, 0, true }, // no toggle
   // Push Switch entrance -> ring bell
   { "MDB/IN/2/19", "MDB/OUT/1/22", NULL, 0, true }, // no toggle
 
   // TEST ONLY
-  { "MDB/IN/0/56", "MDB/OUT/1/2", "MDB/OUT/1/1" },
-  { "MDB/IN/0/28", "MDB/OUT/1/3", NULL, 2000 },
-  { "MDB/IN/0/29", "MDB/OUT/1/1", NULL, 1000 },
+  //{ "MDB/IN/0/56", "MDB/OUT/1/2", "MDB/OUT/1/1" },
+  //{ "MDB/IN/0/28", "MDB/OUT/1/3", NULL, 2000 },
+  //{ "MDB/IN/0/29", "MDB/OUT/1/1", NULL, 1000 },
 
   // END
   { NULL, NULL, NULL },
@@ -565,30 +607,84 @@ CoreIODef core_io_table[] = {
 
 int mqtt_core_subscribe() // Very important for the core logic
 {
-  return mqttClient.subscribe(MQTT_ALL_INPUT);
+  return mqttClient.subscribe(MQTT_ALL_INPUT)
+      && mqttClient.subscribe(MQTT_NODERED_WATCHDOG)
+      && mqttClient.subscribe(MQTT_ALL_OUTPUT);
 }
 
-void publish_output(const char * topic, const char * payload)
+void publish_output(const char * topic, bool status_active)
 {
   if (topic != NULL)
   {
-    bool ok = mqttClient.publish(topic, payload, true);
+    // First memorise "current status"
+    
+    // Set "current" status on *all* buttons that command this same output
+    //for (int j = 0; core_io_table[j].input_topic != NULL; j++)
+    //  if (!strcmp(core_io_table[j].output_topic, topic))
+    //    core_io_table[j].input_status.current_status = status_active;
+    
+    bool ok = mqttClient.publish(topic, status_active ? "1" : "0", true);
     //blink.set(ok ? Blink::BlinkMode::blink_white : Blink::BlinkMode::blink_fast);
   }
 }
+
+// WATCHDOG
+#define WITH_WATCHDOG
+#define WATCHDOG_MILLIS 2500
+#define WATCHDOG_NOT_RECEIVED 9999
+
+int previous_watchdog = WATCHDOG_NOT_RECEIVED;
+long previous_watchdog_ms = 0;
 
 ///
 /// Our common logic - listen to ALL inputs and apply output logic
 ///
 void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
+  // If its a watchdog
+  if (!strcmp(MQTT_NODERED_WATCHDOG,topic))
+  {
+     char my_buffer[8];
+     int payload_length_retained = min(sizeof(my_buffer) - 1, min(length, 6));
+     memcpy(my_buffer, payload, payload_length_retained); // numeric size.. not that large !
+     my_buffer[payload_length_retained] = 0;
+     int new_watchdog_value = atoi(my_buffer);
+     if (new_watchdog_value != previous_watchdog) {
+        previous_watchdog = new_watchdog_value;
+        previous_watchdog_ms = millis();
+     }    
+     return;
+  }
+
+#ifdef WITH_WATCHDOG
+  // Test watchdog : we are active if the watchdog is out of delay !
+  if ( millis() - previous_watchdog_ms > (unsigned long)WATCHDOG_MILLIS )
+  {
+      previous_watchdog = WATCHDOG_NOT_RECEIVED;
+  }
+  // Ignore some messages when others are sending the watchdogs correctly !
+  // Otherwise we apply our simple yet effective logic !
+  bool supervisor_active = (WATCHDOG_NOT_RECEIVED != previous_watchdog);
+#else
+  bool supervisor_active = false;
+#endif
+  
   // If it starts with an input..
 
   // Loop in the INPUTs table
   for (int idx = 0; core_io_table[idx].input_topic != NULL; idx++)
+  {
     // This is one of our input topic !
-    if (!strcmp(topic, core_io_table[idx].input_topic)) {
-
+    if (!strcmp(topic, core_io_table[idx].input_topic)) 
+    {
       Serial.print("Found topic :"); Serial.println(core_io_table[idx].input_topic);
+
+      // Ignore some topics where another supervisor implement a more complicated logic
+      if (supervisor_active && core_io_table[idx].handled_by_other_supervisor)
+      {
+        Serial.println("Topic handled by another supervisor.");
+        continue;
+      }
+
 
       // Value == 1 means input pressed
       bool on = length == 1 && (char)payload[0] == '1';
@@ -597,8 +693,8 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
       if (core_io_table[idx].behave_only_on_when_input_on)
       {
         if (on)
-          publish_output(core_io_table[idx].output_topic_inv, "0");
-        publish_output(core_io_table[idx].output_topic, on ? "1" : "0");
+          publish_output(core_io_table[idx].output_topic_inv, false);
+        publish_output(core_io_table[idx].output_topic, on );
       }
       else if (core_io_table[idx].max_impulse_on_ms != 0 && on)
       {
@@ -608,31 +704,33 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
         core_io_table[idx].input_status.start_millis = timenow;
 
         if (on)
-          publish_output(core_io_table[idx].output_topic_inv, "0");
-        publish_output(core_io_table[idx].output_topic, on ? "1" : "0");
+          publish_output(core_io_table[idx].output_topic_inv, false);
+        publish_output(core_io_table[idx].output_topic, on );
       }
       else if (on)// TOGGLE when clicked
       {
         bool out_on = ! core_io_table[idx].input_status.current_status;
-        core_io_table[idx].input_status.current_status = out_on;
-        if (out_on)
-          publish_output(core_io_table[idx].output_topic_inv, "0");
-        publish_output(core_io_table[idx].output_topic, out_on ? "1" : "0");
-      }
-      //const char *           output_topic_inv;
-      /// Delay "on" in milliseconds (output automatically set to off after delay)
-      //unsigned short         max_impulse_on_ms;
-      /// Behaviour : alternative : only on when input is on
-      //bool                   behave_only_on_when_input_on;
-      /// Quick status
-      //StatusInputIO          input_status;
-      /// 0 if inactive, != 0 millis() when input was last toggled on
-      //unsigned long start_millis;
-      /// True if "on"
-      //bool current_status;
 
+        if (out_on)
+          publish_output(core_io_table[idx].output_topic_inv, false);
+        publish_output(core_io_table[idx].output_topic, out_on);
+      }
+      continue;
     }
+
+    // ----------------------------------------------- 
+
+    // Animate status !
+    // This is one of our output topic !
+    if (length == 1 && ((char)payload[0] == '1' || (char)payload[0] == '0') 
+        && !strcmp(topic, core_io_table[idx].output_topic))
+    {
+        core_io_table[idx].input_status.current_status = ((char)payload[0] == '1');
+    }    
+  }
 }
+
+
 
 void setup_core()
 {
@@ -640,6 +738,10 @@ void setup_core()
 
 void core_loop()
 {
+  // XXX - Cover roller handling
+
+  // -----------------------------------------------------
+  
   // handle the maximum time impulses
   for (int idx = 0; core_io_table[idx].input_topic != NULL; idx++)
     if (core_io_table[idx].input_status.start_millis != 0 &&
@@ -652,24 +754,11 @@ void core_loop()
 
 #endif
 
-// -------------------------------------------------------------------------------
-
-#ifdef MODE_TRACE
-int mqtt_trace_subscribe() // Source for the traces / status
-{
-  mqttClient.subscribe(MQTT_ALL_STATUS);
-  return mqttClient.subscribe(MQTT_ALL_TRACE);
-}
-///
-/// Log the traces on the screen
-///
-void mqtt_trace_callback(char* topic, byte* payload, unsigned int length) {
-
-}
-
-#endif
 
 // ---------------------------------------------------------------------------
+bool test_good_ethernet(); // fwd
+bool setup_network();//fwd
+
 
 // MQTT Client connect/reconnect
 void mqttClientConnect()
@@ -704,9 +793,6 @@ void mqttClientConnect()
 #ifdef MODE_CORE
     r = mqtt_core_subscribe(); // Very important for the core logic
 #endif
-#ifdef MODE_TRACE
-    r = mqtt_trace_subscribe(); // Source for the traces
-#endif
 
     Serial.print("subscribed: "); Serial.println(r);
     // Blink status
@@ -725,6 +811,10 @@ void mqttClientConnect()
     Serial.print(Ethernet.linkStatus());
     Serial.print(" Eth hardware: ");
     Serial.println(Ethernet.hardwareStatus());
+    // Setup the network again, effective in case of brown-out,
+    // otherwise the program continues, but the ethernet layer loose its config.
+    if (!test_good_ethernet())
+      setup_network();
   }
 }
 
@@ -739,11 +829,37 @@ void setup_common()
   Serial.print("@ Starting up... with ");  Serial.print(freeRam()); Serial.println(" free ram.");
 
   // Just blink a hello
-  blink.set(Blink::BlinkMode::blink_black);
+  blink.set(Blink::BlinkMode::blink_whitetics);
 
   // Delay for the harware... is this Cargo Cult ?
   delay(100);
 
+  // Network reset
+  //pinMode( PIN_RESET_NETWORK, OUTPUT);
+  //digitalWrite(PIN_RESET_NETWORK, LOW);
+  //delay(100); // 500us minimum
+  //digitalWrite(PIN_RESET_NETWORK, HIGH);
+
+  // Setting up the network
+  while (!setup_network())
+  { 
+    blink.loop();
+  }
+}
+
+// Test if ethernet status is ok (could reset with more sensitivity than the arduino, in case of brown-out
+// @return true if ok, false if problem with the network
+bool test_good_ethernet()
+{
+  uint8_t _mac[6];
+  Ethernet.MACAddress(_mac);
+  return _mac[0] != 0;
+}
+
+// Setup Ethernet / IP network
+// @return true if ok, false if problem with the network
+bool setup_network()
+{
   // Use a jumper to set arduino #number
   arduinoNumber = setup_compute_dipswitch_number(PIN_DIPSWITCH);
 
@@ -758,23 +874,24 @@ void setup_common()
 
   // Setup ETHERNET / IP layer
   Ethernet.begin(current_mac, current_ip, current_dns, current_gw, current_subnet);
-  Serial.print("@@@@ MAC : ");
+  
+  // bad .. bad news !!
+  if ((!test_good_ethernet()) || (Ethernet.hardwareStatus() == EthernetNoHardware)) 
+  {
+    blink.set(Blink::BlinkMode::blink_black);
+    Serial.print("@@@@ Ethernet init failed.");
+    return false;   
+  }
   uint8_t _mac[6];
   Ethernet.MACAddress(_mac);
+  
+  Serial.print("@@@@ MAC : ");
   Serial.print(_mac[0], HEX); Serial.print(":"); Serial.print(_mac[1], HEX); Serial.print(":");
   Serial.print(_mac[2], HEX); Serial.print(":"); Serial.print(_mac[3], HEX); Serial.print(":");
   Serial.print(_mac[4], HEX); Serial.print(":"); Serial.print(_mac[5], HEX); Serial.println();
-
   Serial.print("@@@@ IP : "); Serial.print(Ethernet.localIP()); Serial.println("");
 
-  // Dead Ethernet hardware!
-  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    blink.set(Blink::BlinkMode::blink_black);
-    while (1) {
-      blink.loop();
-      delay(10);
-    }
-  }
+  return true;
 }
 
 // COMMON LOOP ------------------------------------------------------------

@@ -371,11 +371,11 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
  
   public:
   
-  /** Création - initialisation
-   *  @param ploadPin Numéro de pin PARALLEL LOAD 
-   *  @param clockEnablePin Numéro de pin CLOCK ENABLE
-   *  @param dataPin Numéro de pin DATA
-   *  @param clockPin Numéro de pin CLOCK 
+  /** Initialize
+   *  @param ploadPin pin number for PARALLEL LOAD 
+   *  @param clockEnablePin pin for CLOCK ENABLE
+   *  @param dataPins Array of DATA pins
+   *  @param clockPin CLOCK pin
    */
   ShiftInput(triggerEventCallback & callbackTrigger, int ploadPin,int clockEnablePin,int clockPin, const int (&dataPins)[INS])
   : m_ploadPin(ploadPin),
@@ -416,7 +416,7 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
   std::bitset<OUTS> readInputs()
   {
     #if 1
-    // Lire 3 par sécurité anti-parasite
+    // Read 3 times for anti-parasite protect !
     std::bitset<OUTS> i1, i2, i3;
     do {
       i1 = readInputsInner();  
@@ -427,7 +427,6 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
     std::bitset<OUTS> i1 = readInputsInner();  
 
 #endif
-    //Serial.println("Unparaziting ok --------------------------------------");
     return i1;
   } 
 
@@ -463,22 +462,21 @@ template <size_t BITS, size_t INS, size_t OUTS> class ShiftInput : public IShift
         {
           long bitVal = digitalRead(m_dataPin[j]);
           //Serial.print("Setting bit #");Serial.print((BITS - 1) - i + offset_bits);Serial.print(" to ");Serial.println(bitVal);
-#if 1
-          auto index = (BITS - 1) - i + offset_bits;
-          if (index >= OUTS || index < 0) {
-            Serial.print("Setting off bit #");Serial.print(index);Serial.print(" to ");Serial.println(bitVal);
-          } else{
-            bytesVal.set(index, bitVal != 0);
-          }
-#endif
+
+          // The bits are read 0 first 31 last...
+          auto index = i + offset_bits;
+
+#ifdef HACK_FIX_LAST_TWO_BITS // Hardware V2.1
+          index = (index & ~3) | ((index ^ 3) & 3);
+#endif          
+          // If the bits were read 31 first, 0 last :
+          //auto index = (BITS - 1) - i + offset_bits;
+          bytesVal.set(index, bitVal != 0);
+          
           // nb: Offset addition to avoid a multiply
-          offset_bits += BITS;
-          // nb: for reference : original code
-          //bytesVal |= (bitVal << ((m_dataWidth-1) - i));
+          offset_bits += BITS;         
         }
         
-        //bytesVal |= (bitVal << i);
-
         /* Pulse the Clock (rising edge shifts the next bit).
         */
         digitalWrite(m_clockPin, HIGH);

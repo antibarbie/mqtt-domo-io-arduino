@@ -8,8 +8,9 @@ class Blink {
   enum BlinkMode {
     blink_black = BLK(100,2000),
     blink_slow= BLK(1000,2000),
-    blink_fast = BLK(80,200),
-    blink_white  = BLK(3000,40),    
+    blink_fast = BLK(40,200),
+    blink_white  = BLK(3000,40),   
+    blink_whitetics  = BLK(200,40),
   };
   private:
   
