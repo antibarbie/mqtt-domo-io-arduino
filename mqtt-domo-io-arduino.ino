@@ -8,6 +8,7 @@
 #include "ShiftOutput.h"
 #include "ShiftInput.h"
 #include "Blink.h"
+#include "Cover.h"
 
 #define RELEASE_VERSION "0.6 - 02/2021"
 
@@ -428,6 +429,8 @@ void mqtt_output_callback(char* topic, byte* payload, unsigned int length) {
 
 #ifdef MODE_CORE
 
+#define WITH_COVER
+
 //                    [NODE 0 (master)]  [Slave 1]    [Slave 2]
 // flattened naming:   /IN/0/0-31        /IN/0/32-63  /IN/0/64-95
 // cards/input naming: /IN/0/0-31        /IN/1/0-31   /IN/2/0-31
@@ -479,25 +482,29 @@ CoreIODef core_io_table[] = {
   { "MDB/IN/2/6", "MDB/OUT/0/23" },
   { "MDB/IN/2/7", "MDB/OUT/0/24" },
 
+#ifndef WITH_COVER
   // VR parental suite
   { "MDB/IN/2/2", "MDB/OUT/1/0", "MDB/OUT/1/1" },
   { "MDB/IN/2/3", "MDB/OUT/1/1", "MDB/OUT/1/0" },
   // VR bath parental suite
   { "MDB/IN/2/8", "MDB/OUT/1/2", "MDB/OUT/1/3" },
   { "MDB/IN/2/9", "MDB/OUT/1/3", "MDB/OUT/1/2" },
+#endif
 
   // Wire 6 : 1..11 => IN/1/16..IN/1/26
   
   // CHC
   { "MDB/IN/1/16", "MDB/OUT/0/20" },
+  // CHM
+  { "MDB/IN/1/19", "MDB/OUT/0/21" },
+#ifndef WITH_COVER
   // VR room 2
   { "MDB/IN/1/17", "MDB/OUT/1/6", "MDB/OUT/1/7" },
   { "MDB/IN/1/18", "MDB/OUT/1/7", "MDB/OUT/1/6" },
-  // CHM
-  { "MDB/IN/1/19", "MDB/OUT/0/21" },
   // VR room 1
   { "MDB/IN/1/20", "MDB/OUT/1/4", "MDB/OUT/1/5" },
   { "MDB/IN/1/21", "MDB/OUT/1/5", "MDB/OUT/1/4" },
+#endif
 
   // Wire 5 : 1..10 : IN/1/0 .. IN/1/8 (9?)
   
@@ -513,6 +520,7 @@ CoreIODef core_io_table[] = {
   { "MDB/IN/1/1", "MDB/OUT/0/14" },//ext sud
   { "MDB/IN/1/23", "MDB/OUT/0/10" },
 
+#ifndef WITH_COVER
   // VR roll living saloon
   { "MDB/IN/1/2", "MDB/OUT/1/10", "MDB/OUT/1/11" },//Living
   { "MDB/IN/1/3", "MDB/OUT/1/11", "MDB/OUT/1/10" },
@@ -524,6 +532,7 @@ CoreIODef core_io_table[] = {
   // VR roll living kitchen saloon
   { "MDB/IN/0/20", "MDB/OUT/1/8", "MDB/OUT/1/9"  },//Kitchen
   { "MDB/IN/0/21", "MDB/OUT/1/9", "MDB/OUT/1/8"  },
+#endif
 
   // Switch on/off kitchen -> Electric VMC trap
   { "MDB/IN/0/26", "MDB/OUT/1/21", NULL, 0, true }, // no toggle
@@ -604,26 +613,47 @@ CoreIODef core_io_table[] = {
 
 };
 
+#ifdef WITH_COVER
+
+#define MQTT_COVER_ALL "MDB/VR/#"
+
+Cover cover_table[] = {
+  // MQTT cover topics   MDB/VR/name ; /status (opening,...) /pos (0..100) /pos/set (setpoint 0..100)
+  //topic_cover, topic_up,      topic_dw,       topic_bt_up, topic_bt_dw, time_up, time_dw, time_margin, time_lag
+  Cover("MDB/VR/CH1", "MDB/OUT/1/4", "MDB/OUT/1/5", "MDB/IN/1/20","MDB/IN/1/21",6000,   6000,    200,         200),
+  Cover("MDB/VR/CH2", "MDB/OUT/1/6", "MDB/OUT/1/7", "MDB/IN/1/17","MDB/IN/1/18",6000,   6000,    200,         200),
+  Cover("MDB/VR/CHP", "MDB/OUT/1/0", "MDB/OUT/1/1", "MDB/IN/2/2","MDB/IN/2/3",6000,   6000,    200,         200),
+  Cover("MDB/VR/SDB2","MDB/OUT/1/2", "MDB/OUT/1/3", "MDB/IN/2/8","MDB/IN/2/9",6000,   6000,    200,         200),
+  
+  Cover("MDB/VR/SEJ","MDB/OUT/1/10", "MDB/OUT/1/11", "MDB/IN/1/2","MDB/IN/1/3",12000,  12000,    200,         400),
+  Cover("MDB/VR/SAL","MDB/OUT/1/12", "MDB/OUT/1/13", "MDB/IN/1/6","MDB/IN/1/7",12000,  12000,    200,         400),
+  Cover("MDB/VR/CUI","MDB/OUT/1/8", "MDB/OUT/1/9", "MDB/IN/0/20","MDB/IN/0/21",12000,  12000,    200,         400),
+  Cover( )
+};
+#endif
 
 int mqtt_core_subscribe() // Very important for the core logic
 {
   return mqttClient.subscribe(MQTT_ALL_INPUT)
       && mqttClient.subscribe(MQTT_NODERED_WATCHDOG)
-      && mqttClient.subscribe(MQTT_ALL_OUTPUT);
+      && mqttClient.subscribe(MQTT_ALL_OUTPUT)
+#ifdef WITH_COVER     
+      && mqttClient.subscribe(MQTT_COVER_ALL)
+#endif
+      ;
 }
+
+bool publish_generic(const char * topic, const char * payload, bool retain)
+{
+  return mqttClient.publish(topic, payload, retain);
+}
+
 
 void publish_output(const char * topic, bool status_active)
 {
   if (topic != NULL)
   {
-    // First memorise "current status"
-    
-    // Set "current" status on *all* buttons that command this same output
-    //for (int j = 0; core_io_table[j].input_topic != NULL; j++)
-    //  if (!strcmp(core_io_table[j].output_topic, topic))
-    //    core_io_table[j].input_status.current_status = status_active;
-    
-    bool ok = mqttClient.publish(topic, status_active ? "1" : "0", true);
+    bool ok = publish_generic(topic, status_active ? "1" : "0", true);
     //blink.set(ok ? Blink::BlinkMode::blink_white : Blink::BlinkMode::blink_fast);
   }
 }
@@ -667,6 +697,15 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
 #else
   bool supervisor_active = false;
 #endif
+
+// If it starts with a cover
+#ifdef WITH_COVER
+  for (int idx = 0; cover_table[idx].topic_cover != NULL; idx++)
+  {
+    cover_table[idx].Callback(topic, payload, length);
+  }
+#endif
+
   
   // If it starts with an input..
 
@@ -734,11 +773,24 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
 
 void setup_core()
 {
+  //  Cover roller handling
+#ifdef WITH_COVER
+  Cover::Setup(& publish_generic);
+#endif
+  
 }
+
 
 void core_loop()
 {
-  // XXX - Cover roller handling
+  //  Cover roller handling
+#ifdef WITH_COVER
+  for (int idx = 0; cover_table[idx].topic_cover != NULL; idx++)
+  {
+    cover_table[idx].Loop();
+  }
+#endif
+  
 
   // -----------------------------------------------------
   
@@ -748,7 +800,7 @@ void core_loop()
         ( millis() - core_io_table[idx].input_status.start_millis > (unsigned long)core_io_table[idx].max_impulse_on_ms )) // nb: the delta (now - start > delay) handles correctly the millis() rollover after 49 days !
     {
       core_io_table[idx].input_status.start_millis = 0;
-      publish_output(core_io_table[idx].output_topic, "0");
+      publish_output(core_io_table[idx].output_topic, false);
     }
 }
 
