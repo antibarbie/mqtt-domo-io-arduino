@@ -1,39 +1,44 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
 #define WITH_DUMP_TEMP
-//#define WITH_DUMP_LIST
+#define WITH_DUMP_LIST
+
+// Formats a device address to string
+void printAddress(char * addressBuffer, size_t addressBufferSize, DeviceAddress a)
+{
+  if (addressBufferSize > 0) {
+    addressBuffer[addressBufferSize - 1] = 0;
+    snprintf(addressBuffer, addressBufferSize, "%02x%02x%02x%02x%02x%02x%02x%02x", a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7]);
+  }
+}
 
 #ifdef WITH_DUMP_LIST
 // fwd
-void dumpList(int deviceCount, DallasTemperature & sensors);
+void dumpList(int deviceCount, DallasTemperature & sensors)
+{
+  DeviceAddress address;
+  for (int idx = (int)sensors.getDeviceCount() - 1; idx >= 0 ; idx--)
+    if (sensors.getAddress(address, idx))
+    {
+      Serial.print("Sensor found @");Serial.print(idx);Serial.print(" addr: ");
+      char buff[18];
+      printAddress(buff, sizeof(buff), address);
+      Serial.println(buff);
+    }
+}
 #endif
 
-struct namedOneWireDevice {
-  int mysensorsid;
-  const char * tag;
+
+struct MemoOneWireDevice {
   DeviceAddress dev;
   float temp;
   bool changed;
   int pinHint;
 };
 
-#define IO_ID_TEMP1 250
-#define IO_ID_TEMP2 249
-#define IO_ID_TEMP3 248
-#define IO_ID_TEMP4 247
-#define IO_ID_TEMP5 246
-
-namedOneWireDevice ds1820[] = {
-
-  
-{ IO_ID_TEMP1, "temp_martin", {  0x10, 0x88, 0xE3, 0x35, 0x01, 0x08, 0x00, 0x30 }, DEVICE_DISCONNECTED_C, false, 0 },
-{ IO_ID_TEMP2,"temp_entree", {  0x10, 0xA4, 0x86, 0x4A, 0x01, 0x08, 0x00, 0x0A }, DEVICE_DISCONNECTED_C, false, 0 },
-{ IO_ID_TEMP3, "temp_sejour", {  0x28, 0x01, 0xFA, 0xAF, 0x02, 0x00, 0x00, 0x4E }, DEVICE_DISCONNECTED_C, false, 0 },
-{ IO_ID_TEMP4,"temp_ch2", {  0x28, 0x9A, 0xC1, 0xFA, 0x02, 0x00, 0x00, 0xAA }, DEVICE_DISCONNECTED_C, false, 0 },
-{ IO_ID_TEMP5,"temp_chp", {  0x28, 0xC7, 0x05, 0xB0, 0x02, 0x00, 0x00, 0x08 }, DEVICE_DISCONNECTED_C, false, 0 },
-{ 245, "deviceB", {  0x10, 0x9F, 0x05, 0x36, 0x01, 0x08, 0x00, 0x20 }, DEVICE_DISCONNECTED_C, false, 0 },
-{ 244, "deviceD", {  0x10, 0x1E, 0x90, 0x41, 0x01, 0x08, 0x00, 0xB6 }, DEVICE_DISCONNECTED_C, false, 0 },
-{ 243, "deviceE", {  0x10, 0xC0, 0xA7, 0x4B, 0x01, 0x08, 0x00, 0xAF }, DEVICE_DISCONNECTED_C, false, 0 },
-};
-
+#define KNOWN_DS1820 40
+MemoOneWireDevice ds1820[KNOWN_DS1820];
 
 
 /// Lecture d'objets température sur bus 1-wire
@@ -54,7 +59,7 @@ class DS18X {
    // millis for DS18x20 family is  ~750 ms depending on resolution
    const long delayRead = 1000;
    // millis between two reads
-   const long delaySleep = 60000;
+   const long delaySleep = 10000;
    
    // margin between changes in temperature
    const float changeMargin = 0.05f;
@@ -92,6 +97,37 @@ void DS18X::loop() {
          int cnt = _sensors.getDeviceCount();
          if (_count != cnt)
          {
+             for (int devId = 0; devId < cnt; devId++)
+             {
+                DeviceAddress adr;
+                if (_sensors.getAddress(adr, devId))
+                {
+                  bool found = false;
+                  // fill our memory list
+                  for(MemoOneWireDevice & z : ds1820)
+                  {
+                    if (!memcmp(z.dev, adr, sizeof(DeviceAddress))) {
+                      found = true;
+                      break;
+                    }
+                  }
+                  if (!found) {
+                    for(MemoOneWireDevice & z : ds1820)
+                    {
+                      // search for empty address
+                      if (z.dev[0] == 0 && z.dev[1] == 0)
+                      {
+                        memcpy(z.dev, adr, sizeof(DeviceAddress));
+                        z.pinHint = _pin;
+                        z.temp = DEVICE_DISCONNECTED_C;
+                        z.changed = false;
+                        break;
+                      }
+                    }
+                           
+                  }
+                }
+             }
 #ifdef WITH_DUMP_LIST
              // dump ?
              dumpList(cnt, _sensors);
@@ -114,8 +150,12 @@ void DS18X::loop() {
       break;
     case PHASE_READ:
 
-      for(namedOneWireDevice & z : ds1820)
+      for(MemoOneWireDevice & z : ds1820)
       {
+        // pas initialisé
+        if (z.dev[0] == 0 && z.dev[1] == 0)
+          continue;
+        
         // pas branché sur notre pin à nous
         if (z.pinHint != 0 && z.pinHint != _pin)
           continue;
@@ -133,7 +173,11 @@ void DS18X::loop() {
         Serial.print(" - pin ");
         Serial.print(_pin);
         Serial.print(" / ");
-        Serial.print(z.tag);
+        char buff[18];
+        printAddress(buff, sizeof(buff), z.dev);
+        
+        Serial.print(buff);
+        
         Serial.print(" : ");
         Serial.println(t);
 #endif
@@ -186,24 +230,39 @@ void ManyDS18X::loop()
 }
 void ManyDS18X::setup()
 {
+  // Initialize memory !
+  for(MemoOneWireDevice & z : ds1820)
+  {
+    z.dev[0] = 0;
+    z.dev[1] = 0;
+    z.pinHint = 0;
+    z.temp = DEVICE_DISCONNECTED_C;
+    z.changed = false;
+  }
+  
   for(int q = 0; q < _count; q++)
   {
      _ds18[q]->setup();
   }
 }
 
-MyMessage msgtemp(0,V_TEMP);
+
+//MyMessage msgtemp(0,V_TEMP);
 
 void ManyDS18X::update_ds1820_variations() {
-  for (namedOneWireDevice & device : ds1820) {
+  for (MemoOneWireDevice & device : ds1820) {
     if (device.changed) {
       device.changed = false;
       // renvoyer un message
-      msgtemp.setSensor(device.mysensorsid);
-      msgtemp.set(device.temp, 2);
-      send(msgtemp, false);
+      //msgtemp.setSensor(device.mysensorsid);
+      //msgtemp.set(device.temp, 2);
+      //send(msgtemp, false);
       #if 1
-      Serial.print("Temperature updated : ");
+      Serial.print("Sensor : ");
+      char buff[18];
+      printAddress(buff, sizeof(buff), device.dev);
+      Serial.print(buff);
+      Serial.print(" Temperature updated : ");
       Serial.println(device.temp);      
       #endif
     }
@@ -212,11 +271,11 @@ void ManyDS18X::update_ds1820_variations() {
 
 
 void ManyDS18X::presentation() {
-  for (namedOneWireDevice & device : ds1820) {
+  for (MemoOneWireDevice & device : ds1820) {
     if (device.changed) {
       device.changed = false;
       // Affichage initial
-      present(device.mysensorsid, S_TEMP, device.tag, false);
+      //present(device.mysensorsid, S_TEMP, device.tag, false);
     }
   }  
 }
@@ -224,5 +283,5 @@ void ManyDS18X::presentation() {
 /////////////////////////////////////////////////////////////////////////////
 
 
-int onewirepins[] = {7};//,8,9};
-ManyDS18X temperature_sensors(onewirepins);
+int onewirepins[] = {3,4,5};
+ManyDS18X temperature_sensors(onewirepins); 

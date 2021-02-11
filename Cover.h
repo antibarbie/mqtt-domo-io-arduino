@@ -27,13 +27,13 @@ public:
     const char * topic_bt_dw;
 
     /// Time in millis to completely go up (excluding lag)
-    short time_up;
+    word time_up;
     /// Time in millis to completely go down (excluding lag)
-    short time_dw;
+    word time_dw;
     /// Time margin for full_up and full_down (extra time to compensate)
-    short time_margin;
+    word time_margin;
     /// Lag between power on and actual movement
-    short time_lag;
+    word time_lag;
     /// Rotation time for SUN BLADES, after "lag" and before actual up/down movement
     //short time_tilt;
 
@@ -124,10 +124,18 @@ void Cover::Callback(char* topic, byte* payload, unsigned int length)
   
   // *** Test IN TOPIC => setpoint 0/100
   if (!strcmp(topic, topic_bt_up) && on) {
-    setpoint_pos = 100;
+    // A good way to stop ?
+    if (status_up)
+      setpoint_pos = actual_pos;
+    else     
+      setpoint_pos = 100;
     Serial.print(topic_cover);Serial.println(" BT UP received");    
   } else if (!strcmp(topic, topic_bt_dw) && on) {
-    setpoint_pos = 0;
+    // A good way to stop ?
+    if (status_dw)
+      setpoint_pos = actual_pos;
+    else
+      setpoint_pos = 0;
     Serial.print(topic_cover);Serial.println(" BT DW received");        
   // *** Test OUT TOPIC => status dw/up
   } else if (!strcmp(topic, topic_up)) {
@@ -225,7 +233,9 @@ void Cover::loop_testTrigger()
 {
   if (setpoint_pos != NO_VALUE)
   {
-    Serial.print(topic_cover);Serial.print(" found SETPOINT =");Serial.println((int)setpoint_pos);
+    Serial.print(topic_cover);Serial.print(" found SETPOINT =");Serial.print((int)setpoint_pos);
+    Serial.print(" and ACTUAL_POS =");Serial.println((int)actual_pos);
+    
     memo_setpoint_pos = setpoint_pos;
     setpoint_pos = NO_VALUE;
 
@@ -237,33 +247,33 @@ void Cover::loop_testTrigger()
     millis_time_start = millis();
     memo_pos = actual_pos;
     
-    if (memo_setpoint_pos == 0)
+    if (memo_setpoint_pos == 0 && actual_pos == NO_VALUE)  // degenerated case
     {
       publish_generic( topic_up, "0", true);
       publish_generic( topic_dw, "1", true);
       millis_delta_time_expected = time_lag + time_dw +time_margin;
     }
-    else if (memo_setpoint_pos == 100)
+    else if (memo_setpoint_pos == 100 && actual_pos == NO_VALUE) // degenerated case
     {
       publish_generic( topic_dw, "0", true);
       publish_generic( topic_up, "1", true);
       millis_delta_time_expected = time_lag + time_up +time_margin;      
     }
-    else if (memo_setpoint_pos >= 1 && memo_setpoint_pos <= 99 && memo_setpoint_pos != actual_pos)
+    else if (memo_setpoint_pos >= 0 && memo_setpoint_pos <= 100 && memo_setpoint_pos != actual_pos)
     {
       if (memo_setpoint_pos > actual_pos)
       {
         // UP
         publish_generic( topic_dw, "0", true);
         publish_generic( topic_up, "1", true);
-        millis_delta_time_expected = time_lag + time_up * (memo_setpoint_pos - actual_pos) / 100;        
+        millis_delta_time_expected = (long)((float)time_lag + (float)time_up * ((float)memo_setpoint_pos - (float)actual_pos) / 100.0f + (memo_setpoint_pos == 100 ? (float)time_margin : 0.0f)) ;        
       }
       else
       {
         // DW
         publish_generic( topic_up, "0", true);
         publish_generic( topic_dw, "1", true);
-        millis_delta_time_expected = time_lag + time_dw * (actual_pos - memo_setpoint_pos) / 100;                
+        millis_delta_time_expected = (long)( (float)time_lag + (float)time_dw * ((float)actual_pos - (float)memo_setpoint_pos) / 100.0f+ (memo_setpoint_pos == 0 ? (float)time_margin : 0.0f));                
       }
     }
     else if (memo_setpoint_pos == actual_pos)
@@ -278,6 +288,11 @@ void Cover::loop_testTrigger()
       millis_delta_time_expected = 0;
       millis_time_start = 0;
       // ------------- ^^ END ^^
+    }
+    // Debug LOG
+    if (millis_delta_time_expected > 0)
+    {
+      Serial.print(topic_cover);Serial.print(" START MOVE FOR (ms) : ");Serial.println((int)millis_delta_time_expected);
     }
   }
 }

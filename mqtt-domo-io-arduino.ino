@@ -10,7 +10,7 @@
 #include "Blink.h"
 #include "Cover.h"
 
-#define RELEASE_VERSION "0.6 - 02/2021"
+#define RELEASE_VERSION "0.7 - 02/2021"
 
 // ----------------------------------------------------------------
 // Arduino modules
@@ -130,6 +130,7 @@ const int mqtt_broker_port = 1883;
 #define MQTT_IO_SUBSCRIBE_TOPIC MQTT_IO_SUBSCRIBE_TOPIC_COMMON MQTT_ALL_NODES_SUFFIX
 #endif
 #ifdef MODE_CORE
+#include "DS18x.h"
 #define MQTT_SHORT_NAME  "CORE NODE #%d - UID#%d"
 #define MQTT_SHORT_TOPIC "/CORE/%d"
 #endif
@@ -620,14 +621,14 @@ CoreIODef core_io_table[] = {
 Cover cover_table[] = {
   // MQTT cover topics   MDB/VR/name ; /status (opening,...) /pos (0..100) /pos/set (setpoint 0..100)
   //topic_cover, topic_up,      topic_dw,       topic_bt_up, topic_bt_dw, time_up, time_dw, time_margin, time_lag
-  Cover("MDB/VR/CH1", "MDB/OUT/1/4", "MDB/OUT/1/5", "MDB/IN/1/20","MDB/IN/1/21",6000,   6000,    200,         200),
-  Cover("MDB/VR/CH2", "MDB/OUT/1/6", "MDB/OUT/1/7", "MDB/IN/1/17","MDB/IN/1/18",6000,   6000,    200,         200),
-  Cover("MDB/VR/CHP", "MDB/OUT/1/0", "MDB/OUT/1/1", "MDB/IN/2/2","MDB/IN/2/3",6000,   6000,    200,         200),
-  Cover("MDB/VR/SDB2","MDB/OUT/1/2", "MDB/OUT/1/3", "MDB/IN/2/8","MDB/IN/2/9",6000,   6000,    200,         200),
+  Cover("MDB/VR/CH1", "MDB/OUT/1/4", "MDB/OUT/1/5", "MDB/IN/1/20","MDB/IN/1/21",15000,  14600,    500,        400),
+  Cover("MDB/VR/CH2", "MDB/OUT/1/6", "MDB/OUT/1/7", "MDB/IN/1/17","MDB/IN/1/18",15000,  14600,    500,        400),
+  Cover("MDB/VR/CHP", "MDB/OUT/1/0", "MDB/OUT/1/1", "MDB/IN/2/2","MDB/IN/2/3",  15000,  14600,    500,        400),
+  Cover("MDB/VR/SDB2","MDB/OUT/1/2", "MDB/OUT/1/3", "MDB/IN/2/8","MDB/IN/2/9",   9000,   9000,    500,        400),
   
-  Cover("MDB/VR/SEJ","MDB/OUT/1/10", "MDB/OUT/1/11", "MDB/IN/1/2","MDB/IN/1/3",12000,  12000,    200,         400),
-  Cover("MDB/VR/SAL","MDB/OUT/1/12", "MDB/OUT/1/13", "MDB/IN/1/6","MDB/IN/1/7",12000,  12000,    200,         400),
-  Cover("MDB/VR/CUI","MDB/OUT/1/8", "MDB/OUT/1/9", "MDB/IN/0/20","MDB/IN/0/21",12000,  12000,    200,         400),
+  Cover("MDB/VR/SEJ","MDB/OUT/1/10", "MDB/OUT/1/11", "MDB/IN/1/2","MDB/IN/1/3",55000,  53000,    500,         500),
+  Cover("MDB/VR/SAL","MDB/OUT/1/12", "MDB/OUT/1/13", "MDB/IN/1/6","MDB/IN/1/7",55000,  53000,    500,         500),
+  Cover("MDB/VR/CUI","MDB/OUT/1/8", "MDB/OUT/1/9", "MDB/IN/0/20","MDB/IN/0/21",21000,  21000,    500,         500),
   Cover( )
 };
 #endif
@@ -769,10 +770,15 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+#define WITH_DS18
 
 
 void setup_core()
 {
+#ifdef WITH_DS18
+  temperature_sensors.setup();
+#endif
+  
   //  Cover roller handling
 #ifdef WITH_COVER
   Cover::Setup(& publish_generic);
@@ -783,6 +789,10 @@ void setup_core()
 
 void core_loop()
 {
+#ifdef WITH_DS18
+  temperature_sensors.loop();
+#endif
+  
   //  Cover roller handling
 #ifdef WITH_COVER
   for (int idx = 0; cover_table[idx].topic_cover != NULL; idx++)
