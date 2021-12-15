@@ -1,8 +1,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define WITH_DUMP_TEMP
-#define WITH_DUMP_LIST
+//#define WITH_DUMP_TEMP
+//#define WITH_DUMP_LIST
 
 // Formats a device address to string
 void printAddress(char * addressBuffer, size_t addressBufferSize, DeviceAddress a)
@@ -59,7 +59,7 @@ class DS18X {
    // millis for DS18x20 family is  ~750 ms depending on resolution
    const long delayRead = 1000;
    // millis between two reads
-   const long delaySleep = 10000;
+   const long delaySleep = 60000;
    
    // margin between changes in temperature
    const float changeMargin = 0.05f;
@@ -197,20 +197,28 @@ void DS18X::loop() {
   }
 }
 
+/// Handle many DS18x sensors
 class ManyDS18X {
   DS18X ** _ds18;
   int _count;
-  public:
+  const char * _common_topic;
+public:
   template<size_t N>
-  ManyDS18X(int (&pins)[N]);
+  ManyDS18X(const int (&pins)[N]);
+  
   void loop();
-  void setup();
+  /// Pass MQTT common prefix TOPIC and MQTT callback function during setup()
+  void setup(const char * common_topic, bool (* fun)(const char*, const char*, bool));
+  
+private:
   void update_ds1820_variations();
-  void presentation();
+private:
+  //  static publish function pointer
+  static bool (* publish_generic)(const char * topic, const char * payload, bool retain);  
   
 };
 
-template<size_t N> ManyDS18X::ManyDS18X(int (&pins)[N])
+template<size_t N> ManyDS18X::ManyDS18X(const int (&pins)[N])
 {
   _count = N;
   _ds18 = new DS18X*[N];
@@ -228,8 +236,15 @@ void ManyDS18X::loop()
   }
   update_ds1820_variations();
 }
-void ManyDS18X::setup()
+
+/// @param common_topic MQTT topic prefix e.g. "HOME/SENSORS/TEMP/" sensor unique ID will be postfixed
+void ManyDS18X::setup(const char * common_topic, bool (* publish_generic_function)(const char*, const char*, bool))
 {
+  // MQTT Prefix (HERE BE DRAGONS: NOT OWNED BY US !)
+  _common_topic = common_topic;
+  // MQTT Callback
+  publish_generic = publish_generic_function;
+  
   // Initialize memory !
   for(MemoOneWireDevice & z : ds1820)
   {
@@ -246,22 +261,28 @@ void ManyDS18X::setup()
   }
 }
 
+//  static publish function pointer
+bool (* ManyDS18X::publish_generic)(const char * topic, const char * payload, bool retain) = 0;
 
-//MyMessage msgtemp(0,V_TEMP);
+
 
 void ManyDS18X::update_ds1820_variations() {
   for (MemoOneWireDevice & device : ds1820) {
     if (device.changed) {
       device.changed = false;
-      // renvoyer un message
-      //msgtemp.setSensor(device.mysensorsid);
-      //msgtemp.set(device.temp, 2);
-      //send(msgtemp, false);
+
+      // Send MQTT message  topic: HOME/PREFIX/SENSORS/  +  sensor_unique_uid  payload: "12.34"
+      char xxbuff[18];
+      printAddress(xxbuff, sizeof(xxbuff), device.dev);
+      char topicbuff[128];
+      snprintf(topicbuff,sizeof(topicbuff),"%s%s", _common_topic, xxbuff);
+      char tempbuff[12];
+      dtostrf(device.temp, 4, 2, tempbuff);
+      publish_generic(topicbuff, tempbuff, false);
+      
       #if 1
       Serial.print("Sensor : ");
-      char buff[18];
-      printAddress(buff, sizeof(buff), device.dev);
-      Serial.print(buff);
+      Serial.print(xxbuff);
       Serial.print(" Temperature updated : ");
       Serial.println(device.temp);      
       #endif
@@ -269,19 +290,4 @@ void ManyDS18X::update_ds1820_variations() {
   }
 }
 
-
-void ManyDS18X::presentation() {
-  for (MemoOneWireDevice & device : ds1820) {
-    if (device.changed) {
-      device.changed = false;
-      // Affichage initial
-      //present(device.mysensorsid, S_TEMP, device.tag, false);
-    }
-  }  
-}
-
 /////////////////////////////////////////////////////////////////////////////
-
-
-int onewirepins[] = {3,4,5};
-ManyDS18X temperature_sensors(onewirepins); 

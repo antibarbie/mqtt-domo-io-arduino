@@ -10,7 +10,7 @@
 #include "Blink.h"
 #include "Cover.h"
 
-#define RELEASE_VERSION "0.7 - 02/2021"
+#define RELEASE_VERSION "0.10 - 11/2021"
 
 // ----------------------------------------------------------------
 // Arduino modules
@@ -88,6 +88,9 @@ const int mqtt_broker_port = 1883;
 // Option header OPT2 in INPUT BOARD
 #define PIN_INPUT_OPTION2 9
 
+#define PIN_CORE_ONEWIREPINS 3,4,5
+
+
 // Output defs
 
 // The output pin for the 74HC595 is hardwired on A0
@@ -106,6 +109,9 @@ const int mqtt_broker_port = 1883;
 // ROOT/STATUS/IN/1
 // ROOT/STATUS/CORE/1
 // ROOT/STATUS/OUT/0
+
+// With temperature sensors
+#define WITH_DS18
 
 // Watchdog for nodered logic - If nodered is running our CORE is inactive
 #define MQTT_NODERED_WATCHDOG MQTT_ROOT_TOPIC "/NR/WATCHDOG"
@@ -130,7 +136,10 @@ const int mqtt_broker_port = 1883;
 #define MQTT_IO_SUBSCRIBE_TOPIC MQTT_IO_SUBSCRIBE_TOPIC_COMMON MQTT_ALL_NODES_SUFFIX
 #endif
 #ifdef MODE_CORE
-#include "DS18x.h"
+  #ifdef WITH_DS18
+  #include "DS18x.h"
+  #endif
+#define MQTT_CORE_SENSORS_PREFIX MQTT_ROOT_TOPIC "/SENSOR/"
 #define MQTT_SHORT_NAME  "CORE NODE #%d - UID#%d"
 #define MQTT_SHORT_TOPIC "/CORE/%d"
 #endif
@@ -542,8 +551,8 @@ CoreIODef core_io_table[] = {
   { "MDB/IN/0/17", "MDB/OUT/0/16" },
   { "MDB/IN/0/22", "MDB/OUT/0/16" },
   // Bar
-  { "MDB/IN/0/18", "MDB/OUT/0/17" },
-  { "MDB/IN/0/23", "MDB/OUT/0/17" },
+  { "MDB/IN/0/18", "MDB/OUT/0/29"/*"MDB/OUT/0/17"*/ },
+  { "MDB/IN/0/23", "MDB/OUT/0/29"/*"MDB/OUT/0/17"*/ },
   // Bureau
   { "MDB/IN/0/24", "MDB/OUT/0/12" },
   { "MDB/IN/0/25", "MDB/OUT/0/12" },
@@ -620,17 +629,22 @@ CoreIODef core_io_table[] = {
 
 Cover cover_table[] = {
   // MQTT cover topics   MDB/VR/name ; /status (opening,...) /pos (0..100) /pos/set (setpoint 0..100)
-  //topic_cover, topic_up,      topic_dw,       topic_bt_up, topic_bt_dw, time_up, time_dw, time_margin, time_lag
-  Cover("MDB/VR/CH1", "MDB/OUT/1/4", "MDB/OUT/1/5", "MDB/IN/1/20","MDB/IN/1/21",15000,  14600,    500,        400),
-  Cover("MDB/VR/CH2", "MDB/OUT/1/6", "MDB/OUT/1/7", "MDB/IN/1/17","MDB/IN/1/18",15000,  14600,    500,        400),
-  Cover("MDB/VR/CHP", "MDB/OUT/1/0", "MDB/OUT/1/1", "MDB/IN/2/2","MDB/IN/2/3",  15000,  14600,    500,        400),
-  Cover("MDB/VR/SDB2","MDB/OUT/1/2", "MDB/OUT/1/3", "MDB/IN/2/8","MDB/IN/2/9",   9000,   9000,    500,        400),
+  //topic_cover, topic_up,      topic_dw,       topic_bt_up, topic_bt_dw, time_up, time_dw, time_lag, time_margin
+  Cover("MDB/VR/CH1", "MDB/OUT/1/4", "MDB/OUT/1/5", "MDB/IN/1/20","MDB/IN/1/21",14900,  13800,    18,       2000),  
+  Cover("MDB/VR/CH2", "MDB/OUT/1/6", "MDB/OUT/1/7", "MDB/IN/1/17","MDB/IN/1/18",14900,  13800,    18,       2000),
+  Cover("MDB/VR/CHP", "MDB/OUT/1/0", "MDB/OUT/1/1", "MDB/IN/2/2","MDB/IN/2/3",  14900,  13800,    18,       2000),
+  Cover("MDB/VR/SDB2","MDB/OUT/1/2", "MDB/OUT/1/3", "MDB/IN/2/8","MDB/IN/2/9",   9000,   9000,    18,       2000),
   
-  Cover("MDB/VR/SEJ","MDB/OUT/1/10", "MDB/OUT/1/11", "MDB/IN/1/2","MDB/IN/1/3",55000,  53000,    500,         500),
-  Cover("MDB/VR/SAL","MDB/OUT/1/12", "MDB/OUT/1/13", "MDB/IN/1/6","MDB/IN/1/7",55000,  53000,    500,         500),
-  Cover("MDB/VR/CUI","MDB/OUT/1/8", "MDB/OUT/1/9", "MDB/IN/0/20","MDB/IN/0/21",21000,  21000,    500,         500),
+  Cover("MDB/VR/SEJ","MDB/OUT/1/10", "MDB/OUT/1/11", "MDB/IN/1/2","MDB/IN/1/3",55000,  53000,    500,        2000),
+  Cover("MDB/VR/SAL","MDB/OUT/1/12", "MDB/OUT/1/13", "MDB/IN/1/6","MDB/IN/1/7",55000,  53000,    500,        2000),
+  Cover("MDB/VR/CUI","MDB/OUT/1/8", "MDB/OUT/1/9", "MDB/IN/0/20","MDB/IN/0/21",21000,  21000,    500,        2000),
   Cover( )
 };
+#endif
+
+
+#ifdef WITH_DS18
+ManyDS18X temperature_sensors({ PIN_CORE_ONEWIREPINS }); 
 #endif
 
 int mqtt_core_subscribe() // Very important for the core logic
@@ -775,8 +789,9 @@ void mqtt_core_callback(char* topic, byte* payload, unsigned int length) {
 
 void setup_core()
 {
+  // 1-wire sensors auto-detection
 #ifdef WITH_DS18
-  temperature_sensors.setup();
+  temperature_sensors.setup(MQTT_CORE_SENSORS_PREFIX, &publish_generic);
 #endif
   
   //  Cover roller handling
@@ -789,6 +804,7 @@ void setup_core()
 
 void core_loop()
 {
+  // 1-wire sensors probe and publish variations
 #ifdef WITH_DS18
   temperature_sensors.loop();
 #endif

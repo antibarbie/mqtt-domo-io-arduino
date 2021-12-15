@@ -30,10 +30,10 @@ public:
     word time_up;
     /// Time in millis to completely go down (excluding lag)
     word time_dw;
-    /// Time margin for full_up and full_down (extra time to compensate)
-    word time_margin;
     /// Lag between power on and actual movement
     word time_lag;
+    /// Time margin for full_up and full_down (extra time to compensate)
+    word time_margin;
     /// Rotation time for SUN BLADES, after "lag" and before actual up/down movement
     //short time_tilt;
 
@@ -83,6 +83,10 @@ private:
   void loop_updatePosition();
 
 private:
+  // Helper function : stop the cover
+  void StopMovement();
+
+private:
   //  static publish function pointer
   static bool (* publish_generic)(const char * topic, const char * payload, bool retain);  
 };
@@ -115,6 +119,21 @@ Cover::Cover(const char * cv, const char * up, const char * dw, const char * btu
   memo_pos(NO_VALUE),
   memo_setpoint_pos(NO_VALUE)
 {
+}
+
+void Cover::StopMovement()
+{
+  // STOP
+  publish_generic( topic_dw, "0", true);
+  publish_generic( topic_up, "0", true);
+  status_up = false;
+  status_dw = false;      
+  // --------------END :
+  setpoint_pos = NO_VALUE;
+  memo_setpoint_pos = NO_VALUE;
+  millis_delta_time_expected = 0;
+  millis_time_start = 0;
+  // ------------- ^^ END ^^  
 }
 
 void Cover::Callback(char* topic, byte* payload, unsigned int length)
@@ -151,6 +170,9 @@ void Cover::Callback(char* topic, byte* payload, unsigned int length)
     auto covername_len = strlen(topic_cover);
     if (!strncmp(topic_cover, topic, covername_len))
     {
+       Serial.print(topic_cover);Serial.println(" PREFIX command detected");
+       Serial.println(topic);        
+      
       // *** Test /set TOPIC => commands OPEN CLOSE STOP
       if (!strcmp(topic + covername_len, "/set"))
       {
@@ -165,17 +187,7 @@ void Cover::Callback(char* topic, byte* payload, unsigned int length)
           setpoint_pos = 0;
         }else if (length == 4 && !memcmp((char*)payload,"STOP",4)) {
           Serial.println("Got STOP"); 
-          // STOP
-          publish_generic( topic_dw, "0", true);
-          publish_generic( topic_up, "0", true);
-          status_up = false;
-          status_dw = false;
-          setpoint_pos = NO_VALUE;
-          // --------------END :
-          memo_setpoint_pos = NO_VALUE;
-          millis_delta_time_expected = 0;
-          millis_time_start = 0;
-          // ------------- ^^ END ^^
+          StopMovement();
         }else {
           Serial.print("Payload not ok. Len ="); Serial.println(length);
           for (int i = 0; i < min(length,9); i++)
@@ -278,16 +290,7 @@ void Cover::loop_testTrigger()
     }
     else if (memo_setpoint_pos == actual_pos)
     {
-      // STOP
-      publish_generic( topic_dw, "0", true);
-      publish_generic( topic_up, "0", true);
-      status_up = false;
-      status_dw = false;      
-      // --------------END :
-      memo_setpoint_pos = NO_VALUE;
-      millis_delta_time_expected = 0;
-      millis_time_start = 0;
-      // ------------- ^^ END ^^
+      StopMovement();
     }
     // Debug LOG
     if (millis_delta_time_expected > 0)
@@ -307,15 +310,9 @@ void Cover::loop_testEndOfMovement()
       
       // Force theorical value
       actual_pos = memo_setpoint_pos;
-      
-      publish_generic( topic_dw, "0", true);
-      publish_generic( topic_up, "0", true);
-      // ---- END
-      memo_setpoint_pos = NO_VALUE;
-      millis_delta_time_expected = 0;
-      millis_time_start = 0;     
-      status_up = false;
-      status_dw = false;      
+
+      // Force stop and cleanup values
+      StopMovement();
 
       // PUBLISH POS
       char txt[40], valuetext[4];
@@ -398,8 +395,12 @@ void Cover::loop_updatePosition()
 {
   if (memo_pos != NO_VALUE && millis_time_start != 0 && (status_up || status_dw))
   {
+    long deltaTime = millis() - millis_time_start - time_lag;
+    // Do not recompute position if we are during the "lag"
+    if (deltaTime < 0)
+      return;
     
-    auto estimated_pos = ((int)memo_pos) + (int)((status_up ? 1.0f : -1.0f) * (float)(millis() - millis_time_start) / (float)(status_up ? time_up : time_dw) * 100.0f);
+    auto estimated_pos = ((int)memo_pos) + (int)((status_up ? 1.0f : -1.0f) * (float)(deltaTime) / (float)(status_up ? time_up : time_dw) * 100.0f);
     
     //Serial.print("est. pos:"); Serial.println(estimated_pos);
     
